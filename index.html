@@ -1,0 +1,366 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Table Top Battle Grid</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <style>
+        body {
+            margin: 0;
+            padding: 20px;
+            font-family: Arial, sans-serif;
+        }
+
+        #grid {
+            display: grid;
+            grid-template-columns: repeat(10, 50px);
+            gap: 2px;
+            margin: 20px 0;
+        }
+
+        .cell {
+            width: 50px;
+            height: 50px;
+            border: 1px solid #ccc;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+        }
+
+        .token {
+            width: 40px;
+            height: 40px;
+            border-radius: 50%;
+            border: 2px solid rgba(0, 0, 0, 0.2);
+        }
+
+        .dice-controls {
+            margin: 20px 0;
+        }
+
+        .total-sum {
+            font-weight: bold;
+            margin-top: 10px;
+        }
+
+        #userInfo {
+            display: none;
+        }
+    </style>
+</head>
+<body>
+    <div id="loginForm">
+        <input type="text" id="username" placeholder="Username">
+        <input type="password" id="password" placeholder="Password">
+        <button onclick="login()">Login</button>
+        <button onclick="register()">Register</button>
+    </div>
+
+    <div id="userInfo">
+        <span>Logged in as: <span id="userDisplay"></span></span>
+        <input type="color" id="userColor" onchange="saveColor()">
+        <button onclick="logout()">Logout</button>
+    </div>
+
+    <div id="grid"></div>
+
+    <div class="dice-controls">
+        <input type="number" id="diceCount" value="1" min="1" max="12">
+        <select id="diceSides">
+            <option value="4">d4</option>
+            <option value="6">d6</option>
+            <option value="8">d8</option>
+            <option value="10">d10</option>
+            <option value="12">d12</option>
+            <option value="20" selected>d20</option>
+            <option value="100">d100</option>
+        </select>
+        <button onclick="rollMultipleDice()">Roll Dice</button>
+    </div>
+
+    <div id="diceResult"></div>
+
+    <script>
+        const domElements = {
+            loginForm: document.getElementById('loginForm'),
+            userInfo: document.getElementById('userInfo'),
+            userDisplay: document.getElementById('userDisplay'),
+            username: document.getElementById('username'),
+            password: document.getElementById('password'),
+            userColor: document.getElementById('userColor'),
+            grid: document.getElementById('grid'),
+            diceResult: document.getElementById('diceResult')
+        };
+
+        let currentUser = null;
+        let users = {};
+        let ws;
+
+        try {
+            users = JSON.parse(localStorage.getItem('users') || '{}');
+        } catch (error) {
+            console.error('Error loading users:', error);
+            users = {};
+        }
+
+        function connectWebSocket() {
+            const host = window.location.host || 'localhost:3000';
+            const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+            const wsUrl = `${protocol}//${host}`;
+            
+            console.log('Attempting to connect to:', wsUrl);
+            
+            ws = new WebSocket(wsUrl);
+            
+            ws.onopen = () => {
+                console.log('WebSocket Connected Successfully');
+                if (currentUser) {
+                    ws.send(JSON.stringify({
+                        type: 'login',
+                        username: currentUser
+                    }));
+                }
+            };
+
+            ws.onmessage = (event) => {
+                const data = JSON.parse(event.data);
+                console.log('Received message:', data);
+                
+                switch (data.type) {
+                    case 'placeToken':
+                        updateGrid(data);
+                        break;
+                    case 'initGrid':
+                        initializeGrid(data.grid);
+                        break;
+                }
+            };
+
+            ws.onclose = () => {
+                console.log('Disconnected from server');
+                setTimeout(connectWebSocket, 1000);
+            };
+
+            ws.onerror = (error) => {
+                console.error('WebSocket Error:', error);
+            };
+        }
+
+        function updateGrid(data) {
+            const cell = document.querySelector(`.cell[data-row="${data.row}"][data-col="${data.col}"]`);
+            if (!cell) return;
+
+            if (data.remove) {
+                cell.innerHTML = '';
+            } else {
+                const token = document.createElement('div');
+                token.className = 'token';
+                token.style.backgroundColor = data.color;
+                cell.innerHTML = '';
+                cell.appendChild(token);
+            }
+        }
+
+        function initializeGrid(gridState) {
+            document.querySelectorAll('.cell').forEach(cell => cell.innerHTML = '');
+            
+            for (const [key, value] of Object.entries(gridState)) {
+                const [row, col] = key.split('-');
+                const cell = document.querySelector(`.cell[data-row="${row}"][data-col="${col}"]`);
+                if (cell) {
+                    const token = document.createElement('div');
+                    token.className = 'token';
+                    token.style.backgroundColor = value.color;
+                    cell.appendChild(token);
+                }
+            }
+        }
+
+        function debounce(func, wait) {
+            let timeout;
+            return function executedFunction(...args) {
+                const later = () => {
+                    clearTimeout(timeout);
+                    func(...args);
+                };
+                clearTimeout(timeout);
+                timeout = setTimeout(later, wait);
+            };
+        }
+
+        const saveToLocalStorage = debounce((key, value) => {
+            try {
+                localStorage.setItem(key, JSON.stringify(value));
+            } catch (error) {
+                console.error('Error saving to localStorage:', error);
+                alert('Error saving data. Please try again.');
+            }
+        }, 1000);
+
+        async function login() {
+            const username = domElements.username.value.trim();
+            const password = domElements.password.value;
+            
+            if (!username || !password) {
+                alert('Please enter both username and password');
+                return;
+            }
+
+            try {
+                if (users[username] && users[username].password === password) {
+                    currentUser = username;
+                    domElements.loginForm.style.display = 'none';
+                    domElements.userInfo.style.display = 'block';
+                    domElements.userDisplay.textContent = username;
+                    domElements.userColor.value = users[username].color || 'red';
+                    localStorage.setItem('currentUser', username);
+                    
+                    if (ws && ws.readyState === WebSocket.OPEN) {
+                        ws.send(JSON.stringify({
+                            type: 'login',
+                            username: username
+                        }));
+                    }
+                } else {
+                    alert('Invalid username or password');
+                }
+            } catch (error) {
+                console.error('Login error:', error);
+                alert('Error during login. Please try again.');
+            }
+        }
+
+        async function register() {
+            const username = domElements.username.value.trim();
+            const password = domElements.password.value;
+            
+            if (!username || !password) {
+                alert('Please enter both username and password');
+                return;
+            }
+            
+            if (users[username]) {
+                alert('Username already exists');
+                return;
+            }
+            
+            try {
+                users[username] = { password, color: 'red' };
+                saveToLocalStorage('users', users);
+                alert('Registration successful! Please login.');
+            } catch (error) {
+                console.error('Registration error:', error);
+                alert('Error during registration. Please try again.');
+            }
+        }
+
+        function logout() {
+            currentUser = null;
+            localStorage.removeItem('currentUser');
+            domElements.loginForm.style.display = 'block';
+            domElements.userInfo.style.display = 'none';
+            domElements.username.value = '';
+            domElements.password.value = '';
+        }
+
+        const saveColor = debounce(() => {
+            if (!currentUser) return;
+            const color = domElements.userColor.value;
+            users[currentUser].color = color;
+            saveToLocalStorage('users', users);
+        }, 500);
+
+        function createGrid() {
+            const fragment = document.createDocumentFragment();
+            for (let row = 0; row < 10; row++) {
+                for (let col = 0; col < 10; col++) {
+                    const cell = document.createElement('div');
+                    cell.className = 'cell';
+                    cell.dataset.row = row;
+                    cell.dataset.col = col;
+                    fragment.appendChild(cell);
+                }
+            }
+            domElements.grid.appendChild(fragment);
+        }
+
+        function handleCellClick(e) {
+            if (!currentUser) {
+                alert('Please login to place tokens');
+                return;
+            }
+
+            const cell = e.target.closest('.cell');
+            if (!cell) return;
+
+            const row = cell.dataset.row;
+            const col = cell.dataset.col;
+            const hasToken = cell.querySelector('.token');
+
+            if (ws && ws.readyState === WebSocket.OPEN) {
+                ws.send(JSON.stringify({
+                    type: 'placeToken',
+                    row: row,
+                    col: col,
+                    color: users[currentUser].color,
+                    username: currentUser,
+                    remove: hasToken ? true : false
+                }));
+            } else {
+                console.error('WebSocket is not connected');
+            }
+        }
+
+        domElements.grid.addEventListener('click', handleCellClick);
+
+        function rollMultipleDice() {
+            const count = Math.min(Math.max(1, parseInt(document.getElementById('diceCount').value) || 1), 12);
+            const sides = parseInt(document.getElementById('diceSides').value);
+            
+            try {
+                const results = Array.from({ length: count }, () => 
+                    Math.floor(Math.random() * sides) + 1
+                );
+                
+                const total = results.reduce((sum, num) => sum + num, 0);
+                
+                domElements.diceResult.innerHTML = `
+                    <div>Individual rolls: ${results.join(', ')}</div>
+                    <div class="total-sum">Total: ${total}</div>
+                `;
+            } catch (error) {
+                console.error('Dice rolling error:', error);
+                alert('Error rolling dice. Please try again.');
+            }
+        }
+
+        function initializePage() {
+            createGrid();
+            connectWebSocket();
+            
+            const savedUser = localStorage.getItem('currentUser');
+            if (savedUser && users[savedUser]) {
+                currentUser = savedUser;
+                domElements.loginForm.style.display = 'none';
+                domElements.userInfo.style.display = 'block';
+                domElements.userDisplay.textContent = savedUser;
+                domElements.userColor.value = users[savedUser].color || 'red';
+            }
+
+            if ('ontouchstart' in window) {
+                document.body.classList.add('touch-device');
+            }
+        }
+
+        document.addEventListener('DOMContentLoaded', initializePage);
+
+        if ('serviceWorker' in navigator) {
+            window.addEventListener('load', () => {
+                navigator.serviceWorker.register('/sw.js').catch(error => {
+                    console.log('ServiceWorker registration failed:', error);
+                });
+            });
+        }
+    </script>
+</body>
+</html>
